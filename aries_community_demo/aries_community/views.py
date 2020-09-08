@@ -285,6 +285,7 @@ def list_connections(
 
     data_source = "["
 
+
     if agent_type == 'user':
         data_source += "[{'v':'" + agent_owner + "', 'f':'" + agent_owner + "<div><br>" \
                        + \
@@ -296,18 +297,22 @@ def list_connections(
         invitations = AgentInvitation.objects.filter(agent=agent, connecion_guid='').all()
 
         exclude_filter = AgentConnection.objects.filter(agent=agent).values_list('partner_name', flat=True)
-        list = AriesOrganization.objects.values_list('org_name', flat=True)
+        list = AriesOrganization.objects.values_list('org_name', flat=True).exclude(org_name__in=exclude_filter)
+
         size = len(list)
         org = {}
+
+
         for organization in list:
             org[organization] = organization
 
         for connection in connections:
             img = "/static/" + settings.SITE_ORG + "/o_" + connection.partner_name + ".png"
-
+            img = img.replace(" ","_")
+            img = img.lower()
             #        data_source += "['" + connection.partner_name + "','" + agent_owner + "', ''],"
             data_source += ",[{'v':'" + connection.partner_name + "', 'f':'Organização<div><br>" + \
-                           '<img src ='+ img +' title = "o_serpro" alt = "o_serpro" /><br><br>' \
+                           '<img src ='+ img +' title = "org" alt = "org" width="30%" height="30%"/><br><br>' \
                            '<a href="../select_credential_proposal?connection_id='+ connection.guid  +'&connection_partner_name='+connection.partner_name+'"    class="w3-bar-item w3-button w3-padding"><i class="fa fa-id-card"></i></a>' \
                            '<a href="../remove_connection?connection_id='+ connection.guid +'"                                                                  class="w3-bar-item w3-button w3-padding"><i class="fa fa-remove"></i></a>' \
                            + "</div>'},'" + agent_owner + "','']"
@@ -324,13 +329,17 @@ def list_connections(
         invitations = AgentInvitation.objects.filter(agent=agent, connecion_guid='').all()
 
         exclude_filter = AgentConnection.objects.filter(agent=agent).values_list('partner_name', flat=True)
+
+
         list = AriesOrganization.objects.values_list('org_name', flat=True)
+
 
 
         size = len(list)
 
         org = {}
         for organization in list:
+            print('organization->', organization)
             org[organization] = organization
 
         for connection in connections:
@@ -347,8 +356,6 @@ def list_connections(
     data = data_source
 
     return render(request, template,{'agent_name': agent.agent_name, 'connections': connections, 'invitations': invitations,'data': data, 'org': org})
-
-
 
 
 def handle_connection_request_organization(request):
