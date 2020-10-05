@@ -1,32 +1,51 @@
 from django.http import HttpResponseBadRequest, HttpResponseRedirect, HttpResponse
 from django.shortcuts import render, redirect
 from django.contrib.auth import authenticate, get_user_model, login
-from django.urls import reverse
-from django.conf import settings
-from django.utils.translation import ugettext_lazy as trans
-from django.http import HttpResponseRedirect
-from importlib import import_module
-from django.conf import settings
+#from django.urls import reverse
+#from django.conf import settings
+#from django.utils.translation import ugettext_lazy as trans
+#from django.http import HttpResponseRedirect
+#from importlib import import_module
+#from django.conf import settings
+#from rest_framework.authtoken.models import Token
+#from django.contrib.sessions.backends.db import SessionStore
+from django.views.generic.edit import CreateView
+from django.shortcuts import render
+from django.shortcuts import render
+from django.http import JsonResponse
+from django.template.loader import render_to_string
+from django.utils.timezone import timedelta
+from .models import IndyProofRequest
+
+from django.urls import reverse_lazy
+from django.views import generic
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework.response import Response
+#from rest_framework.response import Response
+
 
 import pyqrcode
-import uuid
-import string
-import ast
+#import uuid
+#import string
+#import ast
 import time
 import sweetify
 import pkce
 import datetime
+
+
+from urllib3.exceptions import InsecureRequestWarning #added
+import requests
+#import urllib3
+requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
 from .forms import *
 from .models import *
 from .wallet_utils import *
 from .registration_utils import *
 from .agent_utils import *
-
+from .neoid import *
 
 USER_ROLE = getattr(settings, "DEFAULT_USER_ROLE", 'User')
 ORG_ROLE = getattr(settings, "DEFAULT_ORG_ROLE", 'Admin')
@@ -68,7 +87,6 @@ def user_signup_view(
     else:
         form = UserSignUpForm()
     return render(request, 'registration/signup.html', {'form': form})
-
 
 # Sign up as an org user, and create a agent
 def org_signup_view(
@@ -132,6 +150,7 @@ TOPIC_PERFORM_MENU_ACTION = "perform-menu-action"
 TOPIC_PROBLEM_REPORT = "problem-report"
 TOPIC_MESSAGE = "basicmessages"
 
+
 @api_view(['GET', 'POST'])
 @permission_classes([AllowAny])
 def agent_cb_view(
@@ -183,12 +202,13 @@ def agent_for_current_session(request):
     """
 
     agent_name = request.session['agent_name']
-
     agent = AriesAgent.objects.filter(agent_name=agent_name).first()
 
     # validate it is the correct wallet
     agent_type = request.session['agent_type']
     agent_owner = request.session['agent_owner']
+
+
     if agent_type == 'user':
         # verify current user owns agent
         if agent_owner == request.user.email:
@@ -285,39 +305,37 @@ def list_connections(
 
     data_source = "["
 
-
     if agent_type == 'user':
         data_source += "[{'v':'" + agent_owner + "', 'f':'" + agent_owner + "<div><br>" \
                        + \
-                       '<a onclick="listOrg()" class="w3-bar-item w3-button w3-padding"><i class="fa fa-university"></i>Organization</a>' \
-                       '<a href="../connection_response" class="w3-bar-item w3-button w3-padding"><i class="fa fa-user-secret"></i>External</a>' \
+                       '<a onclick="listOrg()" class="w3-bar-item w3-button w3-padding"><i class="fa fa-university"></i>Organização</a>' \
+                       '<a href="../connection_response" class="w3-bar-item w3-button w3-padding"><i class="fa fa-user-secret"></i>Externo</a>' \
                        + "</div>'},'','']"
 
         connections = AgentConnection.objects.filter(agent=agent).all()
         invitations = AgentInvitation.objects.filter(agent=agent, connecion_guid='').all()
 
         exclude_filter = AgentConnection.objects.filter(agent=agent).values_list('partner_name', flat=True)
-        list = AriesOrganization.objects.values_list('org_name', flat=True).exclude(org_name__in=exclude_filter)
-
+        list = AriesOrganization.objects.values_list('org_name', flat=True)
         size = len(list)
         org = {}
-
-
         for organization in list:
             org[organization] = organization
 
         for connection in connections:
-            img = "/static/" + settings.SITE_ORG + "/o_" + connection.partner_name + ".png"
-            img = img.replace(" ","_")
-            img = img.lower()
+            img = "/static/serpro/o_" + connection.partner_name + ".png"
+
             #        data_source += "['" + connection.partner_name + "','" + agent_owner + "', ''],"
-            data_source += ",[{'v':'" + connection.partner_name + "', 'f':'Organization<div><br>" + \
-                           '<img src ='+ img +' title = "org" alt = "org" width="30%" height="30%"/><br><br>' \
+            data_source += ",[{'v':'" + connection.partner_name + "', 'f':'Organização<div><br>" + \
+                           '<img src ='+ img +' title = "o_serpro" alt = "o_serpro" /><br><br>' \
                            '<a href="../select_credential_proposal?connection_id='+ connection.guid  +'&connection_partner_name='+connection.partner_name+'"    class="w3-bar-item w3-button w3-padding"><i class="fa fa-id-card"></i></a>' \
-                           '<a href="../remove_connection?connection_id='+ connection.guid +'"                                                                  class="w3-bar-item w3-button w3-padding"><i class="fa fa-remove"></i></a>' \
+                           '<button  id=' + connection.guid + ' onclick="removeConnection(this.id)"> <class="w3-bar-item w3-button w3-padding"><i class="fa fa-remove"></i></button>' \
                            + "</div>'},'" + agent_owner + "','']"
 
         data_source += "]"
+        proof = {}
+        field = {}
+        field2 = {}
     else:
         data_source += "[{'v':'" + agent_owner + "', 'f':'" + agent_owner + "<div><br>" \
                        + \
@@ -329,33 +347,121 @@ def list_connections(
         invitations = AgentInvitation.objects.filter(agent=agent, connecion_guid='').all()
 
         exclude_filter = AgentConnection.objects.filter(agent=agent).values_list('partner_name', flat=True)
-        list = AriesOrganization.objects.values_list('org_name', flat=True).exclude(org_name__in=exclude_filter)
-
-#       list = AriesOrganization.objects.values_list('org_name', flat=True)
-
+        list = AriesOrganization.objects.values_list('org_name', flat=True)
 
 
         size = len(list)
 
         org = {}
         for organization in list:
-            print('organization->', organization)
             org[organization] = organization
+
+        proofs = IndyProofRequest.objects.filter(active="True")
+
+        proof = {}
+        for prf in proofs:
+            proof[prf.proof_req_name] = prf.proof_req_name
+
+        credentials = IndyCredentialDefinition.objects.get(agent__agent_name=agent.agent_name)
+
+        credential = credentials.creddef_template
+        attribs = json.loads(credential)
+
+        field = ""
+        field2 = ""
+
+        for value in attribs:
+            field += "'<label>" + value + ": </label><input id=" + value + " class=" + value + "><br><br>'"
+            field2 += "document.getElementById('" + value + "').value"
+
+        field = field.replace(">''<", ">' + '<")
+        field2 = field2.replace("valuedocument", "value, document")
 
         for connection in connections:
             #        data_source += "['" + connection.partner_name + "','" + agent_owner + "', ''],"
             data_source += ",[{'v':'" + connection.partner_name + "', 'f':'" + connection.partner_name + "<div><br>" + \
-                           '<a href="../select_credential_offer?connection_id=' + connection.guid + '&connection_partner_name=' + connection.partner_name + '"    class="w3-bar-item w3-button w3-padding"><i class="fa fa-id-card"></i></a>' \
-                           '<a href="../remove_connection?connection_id=' + connection.guid + '" class="w3-bar-item w3-button w3-padding"><i class="fa fa-remove"></i></a>' \
-                           '<a href="../select_proof_request?connection_id=' + connection.guid + '" class="w3-bar-item w3-button w3-padding"><i class="fa fa-refresh"></i></a>' \
-                           '<button  id='+ connection.guid +' onclick="sendMessage(this.id)"> <class="w3-bar-item w3-button w3-padding"><i class="fa fa-envelope"></i></button >' \
-                           + "</div>'},'" + agent_owner + "','']"
+                            '<button  id=' + connection.guid + '&connection_partner_name=' + connection.partner_name + ' onclick="sendCredential(this.id)"> <class="w3-bar-item w3-button w3-padding"><i class="fa fa-file-archive-o"></i></button >' \
+                            '<button  id=' + connection.guid + ' onclick="removeConnection(this.id)"> <class="w3-bar-item w3-button w3-padding"><i class="fa fa-remove"></i></button>' \
+                            '<button  id=' + connection.guid + ' onclick="listProof(this.id)"> <class="w3-bar-item w3-button w3-padding"><i class="fa fa-refresh"></i></button >' \
+                            '<button  id=' + connection.guid + ' onclick="sendMessage(this.id)"> <class="w3-bar-item w3-button w3-padding"><i class="fa fa-pencil-square-o"></i></button >' \
+                            + "</div>'},'" + agent_owner + "','']"
 
         data_source += "]"
+    return render(request, template,{'agent_name': agent.agent_name, 'connections': connections, 'invitations': invitations, 'data': data, 'org': org, 'proof': proof, 'field': field, 'field2': field2})
+
+def list_connections_org(
+    request,
+    template='aries/connection/list_org.html'
+    ):
+    """
+    List Connections for the current agent.
+    """
+
+    # expects a agent to be opened in the current session
+    (agent, agent_type, agent_owner) = agent_for_current_session(request)
+
+    guid = request.GET.get('connection.guid')
+
+    data_source = "["
+
+    data_source += "[{'v':'" + agent_owner + "', 'f':'" + agent_owner + "<div><br>" \
+                   + \
+                   '<a id=' + agent_owner + ' onclick="invitePerson()" class="w3-bar-item w3-button w3-padding"><i class="fa fa-user"></i>Pessoa</a>' \
+                                            '<a href="../connection_response" class="w3-bar-item w3-button w3-padding"><i class="fa fa-user-secret"></i>Externo</a>' \
+                   + "</div>'},'','']"
+
+    connections = AgentConnection.objects.filter(guid=guid).all()
+
+    invitations = AgentInvitation.objects.filter(agent=agent, connecion_guid='').all()
+
+    exclude_filter = AgentConnection.objects.filter(agent=agent).values_list('partner_name', flat=True)
+    list = AriesOrganization.objects.values_list('org_name', flat=True)
+    size = len(list)
+
+    org = {}
+    for organization in list:
+        org[organization] = organization
+
+    partners = AgentConnection.objects.get(guid=guid)
+    partner_name = partners.partner_name
+    now = datetime.now()
+    proofs = IndyProofRequest.objects.filter(active="True", agent=partner_name, expiration__gte=datetime.now())
+
+    proof = {}
+    for prf in proofs:
+        proof[prf.proof_req_name] = prf.proof_req_name
+
+    credentials = IndyCredentialDefinition.objects.get(agent__agent_name=agent.agent_name)
+
+    credential = credentials.creddef_template
+    attribs = json.loads(credential)
+
+    field = ""
+    field2 = ""
+
+    for value in attribs:
+        field += "'<label>" + value + ": </label><input id=" + value + " class=" + value + "><br><br>'"
+        field2 += "document.getElementById('" + value + "').value"
+
+    field = field.replace(">''<", ">' + '<")
+    field2 = field2.replace("valuedocument", "value, document")
+
+    for connection in connections:
+        #        data_source += "['" + connection.partner_name + "','" + agent_owner + "', ''],"
+        data_source += ",[{'v':'" + connection.partner_name + "', 'f':'" + connection.partner_name + "<div><br>" + \
+                       '<button  id=' + connection.guid + '&connection_partner_name=' + connection.partner_name + ' onclick="sendCredential(this.id)"> <class="w3-bar-item w3-button w3-padding"><i class="fa fa-file-archive-o"></i></button >' \
+                       '<button  id=' + connection.guid + ' onclick="removeConnection(this.id)"> <class="w3-bar-item w3-button w3-padding"><i class="fa fa-remove"></i></button >' \
+                       '<button  id=' + connection.guid + ' onclick="listProof(this.id)"> <class="w3-bar-item w3-button w3-padding"><i class="fa fa-refresh"></i></button >' \
+                       '<button  id=' + connection.guid + ' onclick="sendMessage(this.id)"> <class="w3-bar-item w3-button w3-padding"><i class="fa fa-pencil-square-o"></i></button >' \
+                       + "</div>'},'" + agent_owner + "','']"
+
+    data_source += "]"
+    form = ""
+    form += "teste"
 
     data = data_source
-
-    return render(request, template,{'agent_name': agent.agent_name, 'connections': connections, 'invitations': invitations,'data': data, 'org': org})
+    data = data_source
+    return render(request, template,{'agent_name': agent.agent_name, 'connections': connections, 'invitations': invitations, 'data': data,'org': org, 'proof': proof, 'field': field, 'field2': field2, 'form': form})
 
 
 def handle_connection_request_organization(request):
@@ -379,6 +485,8 @@ def handle_connection_request_organization(request):
     their_agent = target_org[0].agent
 
     try:
+        print('request_connection_invitation->', org, partner_name)
+
         my_connection = request_connection_invitation(org, partner_name)
         connecion_guid = my_connection.guid
 
@@ -391,7 +499,6 @@ def handle_connection_request_organization(request):
             )
             their_invitation.save()
 
-
         invitations = AgentInvitation.objects.filter(id=their_invitation.id).all()
 
         agent_name = invitations[0].agent.agent_name
@@ -402,6 +509,8 @@ def handle_connection_request_organization(request):
         invitation_details = invitations[0].invitation
 
         (agent, agent_type, agent_owner) = agent_for_current_session(request)
+
+        print('receive_connection_invitation->', agent, partner_name, invitation_details)
 
         orgazinational_connection = receive_connection_invitation(agent, partner_name, invitation_details)
         time.sleep(0.5)
@@ -482,8 +591,6 @@ def handle_connection_request(
         print(e)
         handle_alert(request, message=trans('Invitation not created'), type='error')
         return redirect('/connections/')
-
-
 
 
 def handle_connection_response(
@@ -895,89 +1002,74 @@ def handle_select_proof_request(
     Select a Proof Request to send, based on the templates available in the database.
     """
 
-    if request.method=='POST':
-        form = SelectProofRequestForm(request.POST)
-        if not form.is_valid():
-            return render(request, 'aries/form_response.html', {'msg': 'Form error', 'msg_txt': str(form.errors)})
+    proof_request = request.GET.get('proof')
+    connection_id = request.GET.get('connection_id')
+    partner_agent = AgentConnection.objects.get(guid=connection_id)
+    partner_name = partner_agent.partner_name
+
+    (agent, agent_type, agent_owner) = agent_for_current_session(request)
+
+    connections = AgentConnection.objects.filter(guid=connection_id, agent=agent).all()
+    # TODO validate connection id
+    connection = connections[0]
+
+    proof = IndyProofRequest.objects.get(proof_req_name=proof_request)
+
+    proof_req_attrs = proof.proof_req_attrs
+
+    proof_req_predicates = proof.proof_req_predicates
+
+    # selective attribute substitutions
+    institution_did = get_public_did(agent)
+    proof_req_attrs = proof_req_attrs.replace('$ISSUER_DID', institution_did)
+    proof_req_predicates = proof_req_predicates.replace('$ISSUER_DID', institution_did)
+
+    proof_form = SendProofRequestForm(initial={
+        'agent_name': connection.agent.agent_name,
+        'connection_id': connection_id,
+        'partner_name': partner_name,
+        'proof_name': proof.proof_req_name,
+        'proof_attrs': proof_req_attrs,
+        'proof_predicates': proof_req_predicates})
+
+
+    if proof_req_predicates == '[]':
+        proof_req_attrs = json.loads(proof_req_attrs)
+
+        requested_attrs = {}
+
+        test = settings.REVOCATION
+
+
+        if test == True:
+            clk = int(time.time() - 1)
+            revoked = {
+                "to": clk,
+                "from": clk
+            }
+
+            for requested_attr in proof_req_attrs:
+                referent = requested_attr["name"] + "_referent"
+                requested_attrs[referent] = requested_attr
+                requested_attrs[referent].update(non_revoked=revoked)
+
         else:
-            cd = form.cleaned_data
-            proof_request = cd.get('proof_request')
-            connection_id = cd.get('connection_id')
-            partner_name = cd.get('partner_name')
+            for requested_attr in proof_req_attrs:
+                referent = requested_attr["name"] + "_referent"
+                requested_attrs[referent] = requested_attr
 
-            (agent, agent_type, agent_owner) = agent_for_current_session(request)
+        requested_predicates = {}
 
-            connections = AgentConnection.objects.filter(guid=connection_id, agent=agent).all()
-            # TODO validate connection id
-            connection = connections[0]
-
-            proof_req_attrs = proof_request.proof_req_attrs
-            proof_req_predicates = proof_request.proof_req_predicates
-
-            # selective attribute substitutions
-            institution_did = get_public_did(agent)
-            proof_req_attrs = proof_req_attrs.replace('$ISSUER_DID', institution_did)
-            proof_req_predicates = proof_req_predicates.replace('$ISSUER_DID', institution_did)
-
-            proof_form = SendProofRequestForm(initial={
-                    'agent_name': connection.agent.agent_name,
-                    'connection_id': connection_id,
-                    'partner_name': partner_name,
-                    'proof_name': proof_request.proof_req_name,
-                    'proof_attrs': proof_req_attrs,
-                    'proof_predicates': proof_req_predicates})
-
-
-
-            if proof_req_predicates == '[]':
-                proof_req_attrs = json.loads(proof_req_attrs)
-
-                requested_attrs = {}
-
-                test = settings.REVOCATION
-
-                if test == True:
-                    clk = int(time.time()-1)
-                    revoked = {
-                        "to": clk ,
-                        "from": clk
-                    }
-
-                    for requested_attr in proof_req_attrs:
-                        referent = requested_attr["name"] + "_referent"
-                        requested_attrs[referent] = requested_attr
-                        requested_attrs[referent].update(non_revoked = revoked)
-                else:
-                    for requested_attr in proof_req_attrs:
-                        referent = requested_attr["name"] + "_referent"
-                        requested_attrs[referent] = requested_attr
-
-                requested_predicates = {}
-
-                try:
-                    conversation = send_proof_request(agent, connection, proof_request.proof_req_name, requested_attrs, requested_predicates)
-                    handle_alert(request, message=trans('Proof request was sent'), type='success')
-                    return redirect('/connections/')
-                except:
-                    # ignore errors for now
-                    print(" >>> Failed to update conversation for", agent.agent_name)
-                    return render(request, 'aries/form_response.html',
-                                  {'msg': 'Failed to update conversation for ' + agent.agent_name})
-
-            else:
-                return render(request, response_template, {'form': proof_form})
-
+        try:
+            conversation = send_proof_request(agent, connection, proof.proof_req_name, requested_attrs, requested_predicates)
+            handle_alert(request, message=trans('Proof request was sent'), type='success')
+            return redirect('/connections/')
+        except:
+            # ignore errors for now
+            handle_alert(request, message=trans('Proof request not sent'), type='error')
+            return redirect('/connections/')
     else:
-        # find conversation request
-        (agent, agent_type, agent_owner) = agent_for_current_session(request)
-        connection_id = request.GET.get('connection_id', None)
-        connection = AgentConnection.objects.filter(guid=connection_id, agent=agent).get()
-
-        form = SelectProofRequestForm(initial={ 'connection_id': connection_id,
-                                                'partner_name': connection.partner_name,
-                                                'agent_name': connection.agent.agent_name })
-
-        return render(request, form_template, {'form': form})
+        return render(request, response_template, {'form': proof_form})
 
 
 def handle_send_proof_request(
@@ -1267,30 +1359,106 @@ def handle_view_proof(
         sweetify.success(request, title='', html=html, persistent=True, backdrop=False, icon='info', width=600)
         return redirect('/conversations/')
 
-#       return render(request, template_request_received, {'conversation': conversation, 'screen': screen})
 
     if requested_proof["state"] == "verified":
-        for attr, value in requested_proof["presentation"]["requested_proof"]["revealed_attrs"].items():
-            attr = attr.replace('_referent', '')
-            attr = attr.capitalize()
-            screen[attr] = value
 
-        for attr, value in requested_proof["presentation"]["requested_proof"]["revealed_attrs"].items():
-            value["identifier"] = requested_proof["presentation"]["identifiers"][value["sub_proof_index"]]
+        value = requested_proof["presentation"]["requested_proof"]["revealed_attrs"]
+        value = str(value)
 
-        html = '<h4><p style="text-align:left;">'
-        if test == True:
+        if  value.find("{}") == -1:
+            for attr, value in requested_proof["presentation"]["requested_proof"]["revealed_attrs"].items():
+                attr = attr.replace('_referent', '')
+                attr = attr.capitalize()
+                screen[attr] = value
 
-            for x, y in screen.items():
-                html += '<b>' + x + '</b>' + ' : ' + y['raw'] + '<br>'
-            html += '</p>'
+            for attr, value in requested_proof["presentation"]["requested_proof"]["revealed_attrs"].items():
+                value["identifier"] = requested_proof["presentation"]["identifiers"][value["sub_proof_index"]]
+
+            if test == True:
+                html = '<h4><p style="text-align:left;">'
+
+                for x, y in screen.items():
+                    html += '<b>' + x + '</b>' + ' : ' + y['raw'] + '<br>'
+                html += '</p>'
             sweetify.success(request, title='', html=html, persistent=True, backdrop=False, icon='info', width=600)
             return redirect('/conversations/')
-#           return render(request, template, {'conversation': conversation, 'proof': requested_proof, 'screen': screen, 'revoked': revoked})
-#           return render(request, template, {'conversation': conversation, 'proof': requested_proof, 'screen': screen})
+        if value.find("{}") == 0:
+            for attr, value in requested_proof["presentation"]["requested_proof"]["self_attested_attrs"].items():
+                attr = attr.replace('_referent', '')
+                attr = attr.capitalize()
+                screen[attr] = value
+
+            if test == True:
+                html = '<h4><p style="text-align:left;">'
+                for x, y in screen.items():
+                    html += '<b>' + x + '</b>' + ' : ' + y + '<br>'
+                html += '</p>'
+
+            sweetify.success(request, title='', html=html, persistent=True, backdrop=False, icon='info', width=600)
+            return redirect('/conversations/')
         else:
             return render(request, template, {'conversation': conversation, 'proof': requested_proof, 'screen': screen})
 
+def handle_view_proof_sent(
+    request
+    ):
+    """
+    View the Proof sent by the Prover.
+    """
+
+    (agent, agent_type, agent_owner) = agent_for_current_session(request)
+    conversation_id = request.GET.get('conversation_id', None)
+
+
+    conversations = AgentConversation.objects.filter(guid=conversation_id, connection__agent=agent).all()
+
+    # TODO validate conversation id
+    conversation = conversations[0]
+
+    requested_proof = get_agent_conversation(agent, conversation_id, PROOF_REQ_CONVERSATION)
+    screen = {}
+
+    for attr, value in requested_proof["presentation"]["requested_proof"]["self_attested_attrs"].items():
+        attr = attr.replace('_referent', '')
+        screen[attr] = value
+
+    html = '<h4><p style="text-align:left;">'
+    for x, y in screen.items():
+        html += '<b>' + x + '</b>' + ' : ' + y + '<br>'
+    html += '</p>'
+    sweetify.success(request, title='', html=html, persistent=True, backdrop=False, icon='info', width=600)
+    return redirect('/conversations/')
+
+
+def handle_view_credential(
+    request,
+    template='aries/credential/view_credential.html'
+    ):
+    """
+    View the Proof sent by the Prover.
+    """
+
+    (agent, agent_type, agent_owner) = agent_for_current_session(request)
+    conversation_guid = request.GET.get('conversation_guid', None)
+    org = request.GET.get('org', None)
+
+    credentials = fetch_credentials(agent)
+    connections = AgentConnection.objects.filter(guid=conversation_guid).all()
+
+    conversations = AgentConversation.objects.get(connection=connections[0], status="credential_acked")
+    rev_reg_id = conversations.rev_reg_id
+
+    for credential in credentials:
+        rev_reg_id_cred = credential['rev_reg_id']
+        if rev_reg_id == rev_reg_id_cred:
+            html = '<h4><p style="text-align:left;">'
+            html += '<b>' + 'Emissor' + '</b>' + ' : ' + org + '<br>'
+            for attr, value in credential["attrs"].items():
+                html += '<b>' + attr + '</b>' + ' : ' + value + '<br>'
+            html += '</p>'
+
+    sweetify.success(request, title='', html=html, persistent=True, backdrop=False, icon='info', width=400)
+    return redirect('/conversations/')
 
 ######################################################################
 # views to list wallet credentials
@@ -1316,6 +1484,7 @@ def list_wallet_credentials(
         (agent, agent_type, agent_owner) = agent_for_current_session(request)
 
         credentials = fetch_credentials(agent)
+        
         test = settings.REVOCATION
         cred = len(credentials)
 
@@ -1343,6 +1512,7 @@ def list_wallet_credentials(
 
         else:
 #           credentials = fetch_credentials(agent)
+
             for credential in credentials:
                 partner_name = credentials[count]['schema_id']
                 partner_name = partner_name.split(":")
@@ -1417,6 +1587,7 @@ def handle_update_user(
             connections.first_name = cd.get('first_name')
             connections.last_name = cd.get('last_name')
             connections.date_birth = cd.get('date_birth')
+            connections.cpf = cd.get('cpf')
             ori_photo = cd.get('ori_photo')
             new_photo = cd.get('new_photo')
             password1 = cd.get('password1')
@@ -1838,20 +2009,30 @@ def handle_cred_proposal_delete(request):
 
 def handle_view_dashboard(
     request,
-    template='aries/conversation/list_dashboard.html'
+    template='aries/conversation/list_dashboard.html',
     ):
     """
     View dashboard for the current wallet.
     """
-
-    # expects a wallet to be opened in the current session
+    if 'neoid' in request.session:
+        data = request.session['neoid']
+        html = '<h4><p style="text-align:left;">'
+        html += '<b>Dados do NeoID</b><br>'
+        html += '<b>access_token : </b><br>'
+        html += data['access_token']
+        html += '<br>'
+        html += '<b>token_type : </b>' + data['token_type']
+        html += '<br>'
+        html += '<b>scope : </b>' + data['scope']
+        html += '<br>'
+        html += '<b>authorized_identification_type : </b>' + data['authorized_identification_type']
+        html += '<br>'
+        html += '<b>authorized_identification : </b>' + data['authorized_identification']
+        html += '<br>'
+        sweetify.success(request, title='', html=html, persistent=True, backdrop=False, icon='success', width=600)
+        del request.session['neoid']
 
     (agent, agent_type, agent_owner) = agent_for_current_session(request)
-
-    print(agent)
-    print(agent_type)
-    print(agent_owner)
-    print(agent_for_current_session(request))
 
     conversations = AgentConversation.objects.filter(connection__agent=agent).all()
 
@@ -1916,6 +2097,7 @@ def handle_cred_revoke(request):
     conversation_id = request.GET.get('conversation_id', None)
 
     try:
+
         cred_rev_id = request.GET.get('cred_rev_id', None)
         rev_reg_id = request.GET.get('rev_reg_id', None)
 
@@ -1947,31 +2129,153 @@ def handle_cred_revoke(request):
         pass
 
 
-def neoid(request):
+def oauth2(request):
+
     """
     Create a user account with a managed agent.
     """
+
+    code = request.GET.get('code', None)
+    cpf = request.GET.get('cpf', None)
+
     code_verifier = pkce.generate_code_verifier(length=128)
-    headers = {'Content-type': 'application/x-www-form-urlencoded'}
-
-    client_id = "70e17ae0-30fb-456b-be68-bea32573a9e2"
     code_challenge = pkce.get_code_challenge(code_verifier)
-    code_challenge_method = "S256"
-    redirect_uri = "http://localhost:8000/view_dashboard/"
+
     scope = "single_signature"
-    login_hint = "45637962049"
-    request.session['username'] = "bob@mail.com"
+    headers = {'Content-type': 'application/x-www-form-urlencoded'}
+    client_id = settings.NEOID['CLIENT_ID']
+    code_challenge_method = "S256"
+    redirect_uri = "http://localhost:8000" + settings.NEOID['REDIRECT_URI']
+    address = settings.NEOID['ADDRESS']
+    client_secret = settings.NEOID['CLIENT_SECRET']
+    state = "aut"
 
-    state = code
-    url = 'https://homneoid.estaleiro.serpro.gov.br/smartcert-api/v0/oauth/authorize/?response_type=code' \
-          + '&client_id=' + client_id \
-          + '&code_challenge=' + code_challenge \
-          + '&code_challenge_method=' + code_challenge_method \
-          + '&redirect_uri=' + redirect_uri \
-          + '&scope=' + scope \
-          + '&state=' + state \
-          + '&login_hint=' + login_hint
+    login_hint = cpf
 
-    response = redirect(url, headers=headers, verify=False, is_redirect=True)
+    try:
+        if code == "None":
+            connections = AriesUser.objects.get(cpf=cpf)
+            email = connections.email
+            agent = connections.agent
+            request.session['cpf'] = cpf
+            request.session['agent_name'] = email
+            request.session['agent'] = str(agent)
+            request.session['agent_type'] = 'user'
 
-    return response
+            response = get_code_neoid(client_id, code_challenge, code_challenge_method, redirect_uri, scope, state, login_hint, address)
+            request.session['code_verifier'] = code_verifier
+            return response
+        else:
+            code = request.GET.get('code', None)
+            state = request.GET.get('state', None)
+            code_verifier_tmp = request.session['code_verifier']
+            data = get_token_neoid(client_id, client_secret, code, code_verifier_tmp, redirect_uri, address)
+            request.session['neoid'] = data
+            cpf = request.session['cpf']
+            cpf_neoid = data['authorized_identification']
+
+            if cpf == cpf_neoid:
+                email = request.session['agent_name']
+                user = authenticate(email=email)
+                login(request, user)
+                return redirect('/view_dashboard/')
+            else:
+                handle_alert(request, message=trans('Usuario com CPF diferente'), type='error')
+                return redirect('/')
+
+    except:
+        handle_alert(request, message=trans('Usuario não existe'), type='error')
+        return redirect('/')
+
+def handle_proofs(request, template='aries/proof/list.html'):
+    (agent, agent_type, agent_owner) = agent_for_current_session(request)
+
+    if request.method == 'POST':
+        print(request.POST.get)
+        proof_req_name = request.POST.get("proof_req_name")
+
+        test = IndyProofRequest.objects.filter(proof_req_name = proof_req_name)
+
+        if not test:
+            proof_req_description = request.POST.get("proof_req_description")
+            proof_req_attrs = request.POST.getlist("proof_req_attrs")
+            schema = str(request.POST.getlist("schema"))
+            schema = schema.replace("[]'", "")
+            proof_req_predicates = request.POST.get("proof_req_predicates")
+
+            val = "["
+            for attrib in proof_req_attrs:
+                val += '{"name"' + ':' + '"' + attrib + '"}'
+            val = val.replace("}{", "},{")
+            val += "]"
+
+            store = IndyProofRequest.objects.create(
+                proof_req_name=proof_req_name,
+                agent=agent_owner,
+                schema=schema,
+                proof_req_description=proof_req_description,
+                proof_req_attrs=val,
+                proof_req_predicates='[]',
+                creation=datetime.now(),
+                expiration=datetime.now() + timedelta(days=365)
+            )
+            handle_alert(request, message=trans('Consent Created'), type='success')
+            return redirect('/proofs/')
+        else:
+            handle_alert(request, message=trans('Name exist, please change it'), type='error')
+            return redirect('/proofs/')
+
+    else:
+        proofs = IndyProofRequest.objects.filter(agent = agent_owner)
+
+        proof = {}
+
+
+        exclude_filter = AgentConnection.objects.filter(agent=agent).values_list('partner_name', flat=True)
+        orgs_filter = IndySchema.objects.values_list('schema_name', flat=True)
+        orgs = IndySchema.objects.filter(schema_name__in=exclude_filter)
+#       orgs = IndySchema.objects.all()
+
+        connections = AgentConnection.objects.filter(agent=agent).all()
+
+        schemas = []
+        proof = {}
+        for prf in proofs:
+            proof[prf.proof_req_name] = prf.proof_req_name
+
+        for org in orgs:
+            data = IndySchema.objects.get(schema_name = org)
+            schemas.append({"org": data.schema_name, "attr": data.schema})
+
+        for prf in proofs:
+            proof[prf.proof_req_name] = prf.proof_req_name
+
+        return render(request, template, {'proofs': proofs, 'orgs': orgs, 'schemas': schemas})
+
+def handle_proof_remove(request):
+    """
+    Remove proof from user
+    """
+    id = request.GET.get('id', None)
+    proof = IndyProofRequest.objects.filter(id=id)
+    proof.delete()
+    handle_alert(request, message=trans('Connection removed'), type='success')
+    return redirect('/proofs/')
+
+def handle_proof_state(request):
+    """
+    Remove proof from user
+    """
+    id = request.GET.get('id', None)
+    state = request.GET.get('state', None)
+    proof = IndyProofRequest.objects.get(id=id)
+
+    if proof.active == True:
+        proof.active = "False"
+        state = "not active"
+    else:
+        proof.active = "True"
+        state = "active"
+    proof.save()
+    handle_alert(request, message=trans('Defined state'), type='success')
+    return redirect('/proofs/')

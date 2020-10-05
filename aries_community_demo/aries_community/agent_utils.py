@@ -16,6 +16,7 @@ import base58
 from timeit import default_timer
 import os.path
 
+from django.shortcuts import redirect
 from django.conf import settings
 
 from rest_framework.response import Response
@@ -83,9 +84,7 @@ def aries_provision_config(
             ("--label", agent_name),
             "--auto-ping-connection",
             "--auto-accept-invites", 
-            "--auto-accept-requests", 
-            "--auto-respond-messages",
-            "--auto-respond-credential-request",
+            "--auto-accept-requests",
             "--auto-store-credential",
             "--auto-verify-presentation",
             #"--preserve-exchange-records",
@@ -95,6 +94,11 @@ def aries_provision_config(
             ("--admin-api-key", api_key),
             "--enable-undelivered-queue",
 #            "--admin-insecure-mode",
+            "--auto-respond-messages",
+            "--auto-respond-presentation-request",
+            "--auto-respond-credential-offer",
+            "--auto-respond-credential-request",
+            "--auto-respond-presentation-proposal",
         ])
     provisionConfig.extend([
         ("--wallet-type", wallet_type),
@@ -556,6 +560,7 @@ def create_proof_request(name, description, attrs, predicates):
 ######################################################################
 def start_agent_if_necessary(agent, initialize_agent: bool=True, cmd: str='start', config=None) -> (AriesAgent, bool):
     # start agent if necessary
+
     if agent.mobile_agent or (not agent.managed_agent):
         return (agent, False)
 
@@ -908,11 +913,7 @@ def handle_agent_credentials_callback(agent, topic, payload):
     test = settings.REVOCATION
 
     state = payload["state"]
-    print('state-->', state)
-
     cred_exch_id = payload["credential_exchange_id"]
-    print('cred_exch_id->', cred_exch_id)
-
     connection_id = payload["connection_id"]
 
     print(">>> callback:", agent.agent_name, topic, state, cred_exch_id)
@@ -920,7 +921,6 @@ def handle_agent_credentials_callback(agent, topic, payload):
     connection = AgentConnection.objects.filter(agent=agent, guid=connection_id).get()
 
     cred_exches = AgentConversation.objects.filter(connection__agent=agent, guid=cred_exch_id).all()
-    print('cred_exches->', cred_exches)
 
     if state == "offer_received":
         # holder receives a credential offer - create a new AgentConversation
@@ -1747,6 +1747,7 @@ def revoke_credential_search(agent, cred_rev_id, initialize_agent=False):
     # start the agent if requested (and necessary)
     (agent, agent_started) = start_agent_if_necessary(agent, initialize_agent)
 
+    headers = {'Content-type': 'application/x-www-form-urlencoded'}
     revoke_status = None
 
     # create connection and check status

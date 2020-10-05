@@ -1,47 +1,84 @@
-def neoid(
-    request
-    ):
+import requests
+from django.shortcuts import redirect
+from .indy_utils import *
+
+def get_id_from_neoid(code, client_id, code_verifier, redirect_uri, client_secret, address):
     """
-    Create a user account with a managed agent.
+    Send simple message
     """
-    code_verifier = pkce.generate_code_verifier(length=128)
-    print('code_verifier->', code_verifier)
     headers = {'Content-type': 'application/x-www-form-urlencoded'}
 
-    client_id = "70e17ae0-30fb-456b-be68-bea32573a9e2"
-    code_challenge = pkce.get_code_challenge(code_verifier)
-    print('code_challenge->', code_challenge)
-    code_challenge_method = "S256"
-    redirect_uri = "http://localhost:8000/"
-    scope = "single_signature"
-    state = "aut"
-    login_hint = "45637962049"
+    message = {"grant_type" : "authorization_code",
+               "client_id" : client_id,
+               "client_secret" : client_secret,
+               "code" : code,
+               "code_verifier" : code_verifier,
+               "redirect_uri" : redirect_uri}
 
-    payload = {
-        "client_id": "70e17ae0-30fb-456b-be68-bea32573a9e2",
-        "code_challenge": code_challenge,
-        "code_challenge_method": "S256",
-        "redirect_uri": "http://localhost:8000/",
-        "scope": "single_signature",
-        "state": "aut",
-        "login_hint": "45637962049"
-    }
 
-#    url = "https://neoid.estaleiro.serpro.gov.br/smartcert-api/v0/oauth/authorize/?response_type=code&"
-#    response = Response(url, headers=headers, params=payload, verify=False, is_redirect=True)
+    try:
+        response = requests.post(
+            address + "/smartcert-api/v0/oauth/token",
+            json.dumps(message),
+            headers=headers,
+            verify=False
+        )
+        status = response.raise_for_status()
 
-    url = 'https://neoid.estaleiro.serpro.gov.br/smartcert-api/v0/oauth/authorize/?response_type=code' \
-          + '&client_id=' + client_id \
-          + '&code_challenge=' + code_challenge \
-          + '&code_challenge_method=' + code_challenge_method \
-          + '&redirect_uri=' + redirect_uri \
-          + '&scope=' + scope \
-          + '&state=' + state \
-          + '&login_hint=' + login_hint
+    except:
+        raise
 
-#    print(url)
-#    return redirect(url, headers, verify=False)
+    finally:
+        return status
 
-    response = redirect(url, headers=headers, verify=False, is_redirect=True)
+def get_code_neoid(client_id, code_challenge, code_challenge_method, redirect_uri, scope, state, login_hint, address):
+    """
+    Send simple message
+    """
+    headers = {'Content-type': 'application/x-www-form-urlencoded'}
+
+    url = address + '/smartcert-api/v0/oauth/authorize/?response_type=code' \
+              + '&client_id=' + client_id \
+              + '&code_challenge=' + code_challenge \
+              + '&code_challenge_method=' + code_challenge_method \
+              + '&redirect_uri=' + redirect_uri \
+              + '&scope=' + scope \
+              + '&state=' + state \
+              + '&login_hint=' + login_hint
+
+    try:
+        response = redirect(url, verify=False, is_redirect=True)
+
+    except:
+        raise
 
     return response
+
+def get_token_neoid(client_id, client_secret, code, code_verifier_tmp, redirect_uri, address):
+    """
+    Send simple message
+    """
+    headers = {'Content-type': 'application/x-www-form-urlencoded'}
+
+    message = {"client_id": client_id,
+               "client_secret": client_secret,
+               "code": code,
+               "code_verifier": code_verifier_tmp,
+               "redirect_uri": redirect_uri}
+
+    try:
+        response = requests.post(
+            address + "/smartcert-api/v0/oauth/token/?grant_type=authorization_code",
+            params = message,
+            headers=headers,
+            verify=False
+        )
+
+        response.raise_for_status()
+        data = response.json()
+
+    except:
+        raise
+
+    return data
+
